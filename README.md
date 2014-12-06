@@ -1,219 +1,126 @@
-Spark Vagrant VM
-================
 
-Vagrant VM box for Spark.
+vagrant-hadoop-2.4.1-spark-1.0.1
+================================
 
+# Introduction
 
-Preliminaries: VirtualBox and Vagrant
--------------------------------------
-[Vagrant][vagrant] is a tool to "create and configure lightweight, reproducible,
-and portable development environments." Vagrant itself is a virtual instance
-creation and startup tool on top of Oracle VirtualBox which takes care of the
-virtualisation.
+Vagrant project to spin up a cluster of 4 virtual machines with Hadoop v2.4.1 and Spark v1.0.1. 
 
-Download and install the Open Source Edition of VirtualBox from [virtualbox].
+1. node1 : HDFS NameNode + Spark Master
+2. node2 : YARN ResourceManager + JobHistoryServer + ProxyServer
+3. node3 : HDFS DataNode + YARN NodeManager + Spark Slave
+4. node4 : HDFS DataNode + YARN NodeManager + Spark Slave
 
-Then download and install Vagrant from [vagrant]. The Linux packages install
-the `vagrant` executable at `/opt/vagrant/bin` and you will need to add this to
-your path.
+# Getting Started
 
+1. [Download and install VirtualBox](https://www.virtualbox.org/wiki/Downloads)
+2. [Download and install Vagrant](http://www.vagrantup.com/downloads.html).
+3. Run ```vagrant box add centos65 https://github.com/2creatives/vagrant-centos/releases/download/v6.5.1/centos65-x86_64-20131205.box```
+4. Git clone this project, and change directory (cd) into this project (directory).
+5. Run ```vagrant up``` to create the VM.
+6. Run ```vagrant ssh node-1``` to get into your VM.
+7. Run ```vagrant destroy``` when you want to destroy and get rid of the VM.
 
-Building the VM
----------------
-There is a `Rakefile` with useful targets for creating and generating the Spark
-Vagrant VM. To create a new VM run the default Rake target:
+Some gotcha's.
 
-    rake
+1. Make sure you download Vagrant v1.4.3 or higher.
+2. Make sure when you clone this project, you preserve the Unix/OSX end-of-line (EOL) characters. The scripts will fail with Windows EOL characters.
+3. Make sure you have 4Gb of free memory for the VM. You may change the Vagrantfile to specify smaller memory requirements.
+4. This project has NOT been tested with the VMWare provider for Vagrant.
+5. You may change the script (common.sh) to point to a different location for Hadoop and Spark to be downloaded from. Here is a list of mirrors for Hadoop: http://www.apache.org/dyn/closer.cgi/hadoop/common/.
 
-This will create the Spark box in Vagrant and run the necessary Puppet
-provisioning. This step will take some time to install Java, Hadoop, download
-and compile Spark, etc.
+# Advanced Stuff
 
-When the box is complete, you will find it in `target`.
+If you have the resources (CPU + Disk Space + Memory), you may modify Vagrantfile to have even more HDFS DataNodes, YARN NodeManagers, and Spark slaves. Just find the line that says "numNodes = 4" in Vagrantfile and increase that number. The scripts should dynamically provision the additional slaves for you.
 
-You will likely only need to do this once unless you want to adapt the VM and
-make it available to others. If you are the trusting type, there is a prebuilt
-VM at:
+# Make the VMs setup faster
+You can make the VM setup even faster if you pre-download the Hadoop, Spark, and Oracle JDK into the /resources directory.
 
-    https://dl.dropboxusercontent.com/u/1577066/vagrants/spark.box
+1. /resources/hadoop-2.5.2.tar.gz
+2. /resources/spark-1.0.1-bin-hadoop2.tgz
+3. /resources/jdk-7u51-linux-x64.gz
 
-Copy the download to the `target` directory if you are cheating and continue.
+The setup script will automatically detect if these files (with precisely the same names) exist and use them instead. If you are using slightly different versions, you will have to modify the script accordingly.
 
-You can test the VM by using the Vagrant definition in `example`.
+# Post Provisioning
+After you have provisioned the cluster, you need to run some commands to initialize your Hadoop cluster. SSH into node1 and issue the following command.
 
-    cd example
-    vagrant up
-    vagrant ssh
+0. su (pass: vagrant)
+1. $HADOOP_PREFIX/bin/hdfs namenode -format myhadoop
 
-The Spark Web UI will be port forwarded to port 8080 on your host so you can
-open `http://localhost:8080` on your host computer to see some Spark details.
+## Start Hadoop Daemons (HDFS + YARN)
+SSH into node1 and issue the following commands to start HDFS.
 
-The HDFS Web UI is also port forwarded to port 50070 and 50075 so you can browse
-the HDFS on the VM by opening `http://localhost:50070` on your host.
+1. $HADOOP_PREFIX/sbin/hadoop-daemon.sh --config $HADOOP_CONF_DIR --script hdfs start namenode
+2. $HADOOP_PREFIX/sbin/hadoop-daemons.sh --config $HADOOP_CONF_DIR --script hdfs start datanode
 
-When finished, you destroy the VM using:
+SSH into node2 and issue the following commands to start YARN.
 
-    vagrant destroy
+1. $HADOOP_YARN_HOME/sbin/yarn-daemon.sh --config $HADOOP_CONF_DIR start resourcemanager
+2. $HADOOP_YARN_HOME/sbin/yarn-daemons.sh --config $HADOOP_CONF_DIR start nodemanager
+3. $HADOOP_YARN_HOME/sbin/yarn-daemon.sh start proxyserver --config $HADOOP_CONF_DIR
+4. $HADOOP_PREFIX/sbin/mr-jobhistory-daemon.sh start historyserver --config $HADOOP_CONF_DIR
 
+### Test YARN
+Run the following command to make sure you can run a MapReduce job.
 
-Note for the Paranoid
----------------------
-If you are inclined to paranoia, see `modules\spark\manifests\ssh.pp` for notes
-on changing the passwordless root SSH needed on the VM instance to start a
-Spark slave.
+```
+yarn jar /usr/local/hadoop/share/hadoop/mapreduce/hadoop-mapreduce-examples-2.5.2.jar pi 2 100
+```
 
+## Start Spark in Standalone Mode
+SSH into node1 and issue the following command.
 
-Note on the Versions
---------------------
-The VM uses Spark 0.7.2 and Hadoop 1.0.3. The reason for the slightly peculiar
-Hadoop is to match the version in Elastic MapReduce which this work originally
-targetted.
+1. $SPARK_HOME/sbin/start-all.sh
 
-A more recent Hadoop 1 can be selected by changing the download in
-`/modules/spark/manifests/hdfs.pp`,updating the `sed`
-substitution in `/modules/spark/templates/root/spark.setup.erb` and rebuilding.
+### Test Spark on YARN
+You can test if Spark can run on YARN by issuing the following command. Try NOT to run this command on the slave nodes.
+```
+$SPARK_HOME/bin/spark-submit --class org.apache.spark.examples.SparkPi \
+    --master yarn --executor-memory 512M \
+    --num-executors 10 \
+    --executor-cores 2 \
+    lib/spark-examples*.jar \
+    100
+```
+	
+### Test Spark using Shell
+Start the Spark shell using the following command. Try NOT to run this command on the slave nodes.
 
-To use the examples, you may also need to update the dependencies in
-`/example/project/Spark.scala`.
+```
+$SPARK_HOME/bin/spark-shell --master spark://node1:7077
+```
 
+Then go here https://spark.apache.org/docs/latest/quick-start.html to start the tutorial. Most likely, you will have to load data into HDFS to make the tutorial work (Spark cannot read data on the local file system).
 
-Examples
---------
-To run some sample applications, cd to `examples` and compile a fat jar from
-the SBT project there:
+# Web UI
+You can check the following URLs to monitor the Hadoop daemons.
 
-    cd examples
-    ./sbt012 assembly
+1. [NameNode] (http://10.211.55.101:50070/dfshealth.html)
+2. [ResourceManager] (http://10.211.55.102:8088/cluster)
+3. [JobHistory] (http://10.211.55.102:19888/jobhistory)
+4. [Spark] (http://10.211.55.101:8080)
 
-The jar can be run on your host machine directly using e.g.:
+# Vagrant boxes
+A list of available Vagrant boxes is shown at http://www.vagrantbox.es. 
 
-    java -cp target/scala-2.9.3/spark-assembly-1-SNAPSHOT.jar \
-      org.boringtechiestuff.spark.TweetWordCount \
-      --local \
-      dev/sample.json output
+# Vagrant box location
+The Vagrant box is downloaded to the ~/.vagrant.d/boxes directory. On Windows, this is C:/Users/{your-username}/.vagrant.d/boxes.
 
-To run it on the VM, first SSH to it and put the necessary in HDFS:
+# References
+This project was kludge together with great pointers from all around the internet. All references made inside the files themselves.
 
-    vagrant ssh
+# Copyright Stuff
+Copyright 2014 Jee Vang
 
-    hadoop fs -mkdir /lib
-    hadoop fs -put /vagrant/target/scala-2.9.3/spark-assembly-1-SNAPSHOT.jar /lib
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
 
-    hadoop fs -mkdir /input
-    hadoop fs -put /vagrant/dev/sample.json /input
+    http://www.apache.org/licenses/LICENSE-2.0
 
-The `/vagrant` directory is a convenience mount of the `examples` directory onto
-the VM.
-
-Run the same application as earlier but in cluster mode this time:
-
-    java -cp /vagrant/target/scala-2.9.3/spark-assembly-1-SNAPSHOT.jar \
-        org.boringtechiestuff.spark.TweetWordCount \
-        hdfs://localhost:9000/input \
-        hdfs://localhost:9000/output
-
-Check the Web UI on `localhost:8080` to prove it is doing something. When done,
-the output can be checked using:
-
-    hadoop fs -ls /output
-    hadoop fs -text /output/part-*
-
-
-Streaming Examples
-------------------
-Spark also provides a streaming mode.
-
-A streaming version of the previous can be run on your host machine directly
-using:
-
-    java -cp target/scala-2.9.3/spark-assembly-1-SNAPSHOT.jar \
-      org.boringtechiestuff.spark.StreamingTweetWordCount \
-      --local \
-      input output
-
-In this case new files added in `input` will be picked up and processed and
-result left in `output` by timestamp. For instance, copy the input file:
-
-    mkdir input
-    cp dev/sample.json input
-
-After a few seconds, a new directory will be added in output with the results:
-
-   cd output
-   ls -alR
-
-And look for the directory with a nonzero `part-00000`.
-
-The application runs until explicitly killed.
-
-As before, this works on the VM also:
-
-    vagrant ssh
-
-    hadoop fs -rmr /input
-    hadoop fs -mkdir /input
-    hadoop fs -rmr /output
-
-    java -cp /vagrant/target/scala-2.9.3/spark-assembly-1-SNAPSHOT.jar \
-            org.boringtechiestuff.spark.StreamingTweetWordCount \
-            hdfs://localhost:9000/input \
-            hdfs://localhost:9000/output
-
-In another console:
-
-    vagrant ssh
-
-    hadoop fs -put /vagrant/dev/sample.json /input/sample2.json
-
-    hadoop fs -lsr /output
-
-And look for the nonempty `part` files again.
-
-
-Vagrant Commmands
------------------
-Some useful Vagrant commands.
-
-* `vagrant suspend`: Disable the virtual instance. The allocated disc space
-  for the instance is retained but the instance will not be available. The
-  running state at suspend time is saved for resumption.
-* `vagrant resume`: Wake up a previously suspended virtual instance.
-* `vagrant halt`: Turn off the virtual instance. Calling `vagrant up` after
-  this is the equivalent of a reboot.
-* `vagrant destroy`: Hose your virtual instance, reclaiming the allocated disc
-  space.
-* `vagrant provision`: Rerun puppet or chef provisioning on the virtual
-  instance.
-* `vagrant box list`: List the VM definitions that Vagrant has imported.
-* `vagrant box remove <name>`: Remove the named VM definition from Vagrant,
-  possibly to allow for an updated version to be imported.
-
-
-Vagrant SSH X Forwarding
-------------------------
-X applications on VMs can be displayed on the host machine by specifying a
-Vagrant SSH connection with X11 forwarding in the `Vagrantfile`:
-
-    config.ssh.forward_x11 = true
-
-On the host machine, add an `xhost` for the Vagrant VM:
-
-    xhost +10.0.0.2
-
-Then X applications started from the VM should display on the host machine.
-
-
-Vagrant Troubleshooting
------------------------
-To see more verbose output on any vagrant command, add a VAGRANT_LOG environment
-variable setting, e.g.:
-
-    VAGRANT_LOG=INFO /opt/vagrant/bin/vagrant up
-
-Further help troubleshooting can be obtained by editing your `Vagrantfile` and
-enabling the `config.vm.boot_mode = :gui` setting. This will pop up a VirtualBox
-GUI window on boot.
-
-
-[virtualbox]: https://www.virtualbox.org/wiki/Downloads
-[vagrant]: http://vagrantup.com
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
